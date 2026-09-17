@@ -5,7 +5,7 @@ import time
 from dotenv import load_dotenv 
 
 from langchain_groq import ChatGroq 
-from langchain_openai import OpenAIEmbeddings 
+from langchain_huggingface import HuggingFaceEmbeddings # <--- Free, local embeddings
 from langchain_text_splitter import RecursiveCharacterTextSplitter 
 from langchain.chains.combine_documents import create_stuff_documents_chain 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder 
@@ -18,19 +18,20 @@ from langchain_community.document_loaders import PyPDFLoader
 
 load_dotenv() 
 
-## Handle API Keys safely
-if not os.getenv("OPENAI_API_KEY") or not os.getenv("GROQ_API_KEY"):
-    st.warning("Please ensure OPENAI_API_KEY and GROQ_API_KEY are configured in your environment or .env file.")
+## Cleaned up: Only checking for Groq API key now
+if not os.getenv("GROQ_API_KEY"):
+    st.warning("Please ensure GROQ_API_KEY is configured in your environment or .env file.")
 
-os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY", "") 
 os.environ['GROQ_API_KEY'] = os.getenv("GROQ_API_KEY", "") 
 groq_api_key = os.getenv("GROQ_API_KEY") 
 
-# NOTE: Using llama-3.1-8b-instant for text generation. 
-# llama-prompt-guard-2-22m is an injection-detection classifier, not a text generator.
 llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama-3.1-8b-instant")
 
-# Initialize persistent Streamlit session state variables
+## Langsmith Tracking
+os.environ["LANGCHAIN_API_KEY"]=os.getenv("LANGCHAIN_API_KEY")
+os.environ["LANGCHAIN_TRACING_V2"]="true"
+os.environ["LANGCHAIN_PROJECT"]="RAG DOC QNA"
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = ChatMessageHistory()
 
@@ -39,29 +40,25 @@ if "vectors" not in st.session_state:
 
 st.title("RAG Document Q-n-A With History (Groq & Llama)")
 
-# File Uploader implementation
 uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
 
 if st.button("Process & Embed Documents"):
     if uploaded_files:
         all_docs = []
-        # Create a temporary directory to unpack memory files onto disk for standard loaders
         with tempfile.TemporaryDirectory() as temp_dir:
             for uploaded_file in uploaded_files:
                 temp_filepath = os.path.join(temp_dir, uploaded_file.name)
                 with open(temp_filepath, "wb") as f:
                     f.write(uploaded_file.getbuffer())
                 
-                # Load the individual PDF
                 loader = PyPDFLoader(temp_filepath)
                 all_docs.extend(loader.load())
             
-            # Split and chunk the content
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200) 
             final_documents = text_splitter.split_documents(all_docs) 
             
-            # Generate Embeddings database
-            embeddings = OpenAIEmbeddings()
+            # Cleaned up: Using free HuggingFace embeddings instead of OpenAI
+            embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
             st.session_state.vectors = FAISS.from_documents(final_documents, embeddings)
             st.success("Vector Database is ready! You can now type your queries below.")
     else:
@@ -75,7 +72,6 @@ if user_prompt:
     else:
         retriever = st.session_state.vectors.as_retriever()
 
-        # 1. Contextualize the user's question using history
         contextualize_q_system_prompt = (
             "Given a chat history and the latest user question "
             "which might reference context in the chat history, "
@@ -93,7 +89,6 @@ if user_prompt:
         
         history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-        # 2. Main Question Answering with Updated System Prompt Constraints
         qa_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", "You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, say that you don't know. Use five sentences maximum and keep the answer concise.\n\n<context>\n{context}\n</context>"),
@@ -102,11 +97,9 @@ if user_prompt:
             ]
         )
         
-        # Build chains
         document_chain = create_stuff_documents_chain(llm, qa_prompt)
         retrieval_chain = create_retrieval_chain(history_aware_retriever, document_chain)
 
-        # 3. Dynamic History handling 
         def get_session_history(session_id: str) -> BaseChatMessageHistory:
             return st.session_state.chat_history
 
@@ -118,7 +111,6 @@ if user_prompt:
             output_messages_key="answer",
         )
 
-        # Invoke the chain execution
         start = time.process_time()
         response = conversational_rag_chain.invoke(
             {"input": user_prompt},
@@ -127,11 +119,9 @@ if user_prompt:
         
         print(f"Response time: {time.process_time() - start}")
         
-        # Display output
         st.subheader("Answer:")
         st.write(response['answer'])
 
-        # Document similarity Search expander
         with st.expander("Document similarity Source Chunks"):
             for i, doc in enumerate(response['context']):
                 st.write(f"**Chunk {i+1}:** Source: {os.path.basename(doc.metadata.get('source', 'Unknown'))}")
