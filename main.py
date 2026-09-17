@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq 
 from langchain_huggingface import HuggingFaceEmbeddings # <--- Free, local embeddings
-from langchain_text_splitter import RecursiveCharacterTextSplitter 
-from langchain.chains.combine_documents import create_stuff_documents_chain 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain 
+from langchain_classic.chains import create_retrieval_chain, create_history_aware_retriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder 
-from langchain.chains import create_retrieval_chain, create_history_aware_retriever
 from langchain_community.chat_message_histories import ChatMessageHistory 
 from langchain_core.chat_history import BaseChatMessageHistory 
 from langchain_core.runnables.history import RunnableWithMessageHistory 
@@ -25,7 +25,7 @@ if not os.getenv("GROQ_API_KEY"):
 os.environ['GROQ_API_KEY'] = os.getenv("GROQ_API_KEY", "") 
 groq_api_key = os.getenv("GROQ_API_KEY") 
 
-llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama-3.1-8b-instant")
+llm = ChatGroq(groq_api_key=groq_api_key, model_name="openai/gpt-oss-20b")
 
 ## Langsmith Tracking
 os.environ["LANGCHAIN_API_KEY"]=os.getenv("LANGCHAIN_API_KEY")
@@ -45,22 +45,26 @@ uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multipl
 if st.button("Process & Embed Documents"):
     if uploaded_files:
         all_docs = []
-        with tempfile.TemporaryDirectory() as temp_dir:
-            for uploaded_file in uploaded_files:
-                temp_filepath = os.path.join(temp_dir, uploaded_file.name)
-                with open(temp_filepath, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+        
+        # 1. Start the loading spinner animation
+        with st.spinner("Parsing PDFs and generating vector embeddings. Please wait..."):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                for uploaded_file in uploaded_files:
+                    temp_filepath = os.path.join(temp_dir, uploaded_file.name)
+                    with open(temp_filepath, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    
+                    loader = PyPDFLoader(temp_filepath)
+                    all_docs.extend(loader.load())
                 
-                loader = PyPDFLoader(temp_filepath)
-                all_docs.extend(loader.load())
-            
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200) 
-            final_documents = text_splitter.split_documents(all_docs) 
-            
-            # Cleaned up: Using free HuggingFace embeddings instead of OpenAI
-            embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-            st.session_state.vectors = FAISS.from_documents(final_documents, embeddings)
-            st.success("Vector Database is ready! You can now type your queries below.")
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200) 
+                final_documents = text_splitter.split_documents(all_docs) 
+                
+                embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+                st.session_state.vectors = FAISS.from_documents(final_documents, embeddings)
+        
+        # 2. Once the 'with' block completes, the spinner hides and this success message appears
+        st.success("Vector Database is ready! You can now type your queries below.")
     else:
         st.error("Please upload at least one PDF file first.")
 
