@@ -1,0 +1,12 @@
+langchain
+python-dotenv
+ipykernel
+langchain-community
+langchain-core
+langchain-openai
+langchain-groq
+validators==0.28.1
+unstructured
+streamlit
+bs4
+openai
