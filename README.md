@@ -55,7 +55,7 @@ Before setting up, make sure you have:
 
 Launch the app with Streamlit:
 ```bash
-streamlit run app.py
+streamlit run main.py
 ```
 
 ## 💡 How to Use
